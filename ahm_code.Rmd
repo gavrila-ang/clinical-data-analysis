@@ -1,0 +1,132 @@
+---
+title: "Example Presentation BIOL606 spr 2021"
+author: "Nick Barber"
+date: "1/31/2021"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+library(ggplot2)
+library(dplyr)
+library(ggfortify)
+library(AER)
+library(car) # need to generate p-value for model-testing with ANOVA
+```
+
+# Background
+The research question I will ask is whether the high density lipoprotein blood level of older adults affect the frequency of monocytes in their blood, and if this varies with gender. 
+
+
+## Load and inspect hapichi data
+This dataset was generated from a clinical study called HAPI-CHI from April 2015-May 2021. The study investigated the physiological and pyschological effects of a 12-week tai-chi practice on older adults (aged 65-85) from the San Diego area. Each row in this dataset contains clinical measurements from a de-identified research participant, including their visit number. 
+
+The hapichi dataset is large, therefore it was subset to include only variables of interest. Only the initial (baseline) visit data will be used, as the intervention effect will not be investigated. 
+
+```{r}
+hapichi <- read.csv("hapichi_dataset.csv")
+
+hapi <- hapichi %>% 
+  filter(visit == 1) %>% # filter for baseline visit
+  select(c("subject_id", "gender", "hdl_cholesterol", "monocytes")) %>%  #select variables of interest
+  na.omit(TRUE) #omit participants that do not have complete clinical measurements
+
+hapi['gender'][hapi['gender'] == '1'] <- 'Male' #recode gender variables to be more descriptive
+hapi['gender'][hapi['gender'] == '2'] <- 'Female'
+hapi$gender <- as.factor(hapi$gender) # convert gender column data into factored variables
+
+hapi <- rename(hapi, Gender = gender)
+
+glimpse(hapi)
+
+```
+
+## Initial data inspection
+Make figure to initially inspect the effect of my two predictor variables, hdl_cholesterol and gender on my response variable, monocyte frequency. 
+
+```{r}
+# Starting with a visual
+ggplot(data = hapi, aes(y = monocytes, x = hdl_cholesterol, group = Gender, colour = Gender)) +
+  geom_point() +
+  geom_smooth(method = "lm", alpha = .15, aes(fill = Gender)) + 
+  labs(title = "HDL Cholesterol vs Monocytes in Blood", x = "HDL Cholesterol (mg/dL)", y = "Monocyte Frequency (% in peripheral blood)") +
+  theme_bw()
+# The trend lines between monocytes and HDL, grouped by Gender, are parallel. This indicates that there is no interaction effect between my predictor variables. The predictor variables act independently of each other and have an additive effect. 
+
+ggsave("midterm_1_preliminaryplot.jpg")
+
+# Inspect data balance
+hapi %>% group_by(Gender) %>% summarise('Participant Count' = length(Gender)) #unbalanced data
+
+# Normality test and histogram of response variable
+shapiro.test(hapi$monocytes) #non-normal
+ggplot(hapi, aes(monocytes)) + 
+  ggtitle("Histogram of Monocyte Frequency") +
+  geom_histogram(binwidth = 1) + 
+  xlab("Monocyte Frequency (% in peripheral blood)")  #right-skewed response data
+
+ggsave("midterm_1_histogram.jpg")
+
+```
+
+## Monocyte analysis
+Analysing the response variable, monocyte frequency in peripheral blood, which is recorded as a percentage. Monocyte frequency is count data and gender is categorical. Given that the response variable is right-skewed and non-negative integer data, I will use poisson regression. 
+
+```{r}
+hapi.mod <- glm(monocytes ~ hdl_cholesterol + Gender, data = hapi, family = 'poisson') #fit a poisson regression with hld_cholesterol and gender as additive predictor variables 
+
+AER::dispersiontest(hapi.mod) #check dispersion: ~0.7057, data is underdispersed; will proceed with regular poisson regression, but there are better models out there
+
+autoplot(hapi.mod, colour = 'Gender')  #next assess the model by examining residual plots
+
+ggsave("midterm1_autoplot.jpg")
+
+# The residuals vs fitted plot shows heteroscedasticity. In other words, the standard deviations of the log-transformed response variable, when grouped by gender, are non-constant across the predictor variable. The residuals of each gender are separated. 
+
+#The qqnorm plot shows that by log-transforming the monocyte data, the response variable follows normality, with the exception of an outlier (row 143)
+
+# The scale-location plot, also shows heteroscedasticity (unequal variance). 
+
+# The residuals vs. leverage plot is a type of diagnostic plot that allows us to identify influential observations in a regression model. Monocyte data from participants 143, 65 and 87 are influencing the observations. It appears that data from participant 143 is above 3 standard deviations from the normal and can be excluded on the grounds of being an outlier. 
+
+# The response data is underdispersed, unbalanced and heteroscedastic. I will proceed with the analysis, keeping these characteristics in mind.   
+
+Anova(hapi.mod, type=2) # I will assess the data using a "type 2" analysis because my model does not include an interaction and the data is unbalanced. The Analysis of Deviance Table (Type II) is a chi-square test of independence that decides if two variables might be related or not. The effect of hdl_cholesterol to monocytes is not significant (p>0.05). The effect of Gender to monocytes is not significant (p>0.05), but perhaps with a more balanced sample, an interaction between these variables may be discovered. 
+
+summary(hapi.mod)
+```
+
+## Monocyte Figure
+
+This code produces a figure displaying monocytes vs. hdl_cholesterol, depicting Gender separately.
+```{r}
+## Generate new explanatory variable values
+new.x <- expand.grid(
+  hdl_cholesterol = seq(from = 23, to = 135, length.out = 500), # range(hapi$hdl_cholesterol)
+  Gender = levels(hapi$Gender))
+
+# Generate new response variable values
+new.y <- predict(hapi.mod, newdata = new.x, se.fit = TRUE)
+new.y <- data.frame(new.y)
+
+# The link function for a Poisson is log, and so exponentiate to gain moca_total values
+# Create a new datafame from these generated values
+addThese <- data.frame(new.x, new.y)
+addThese <- mutate(addThese, monocytes = exp(fit), lwr = exp(fit - 1.96 * se.fit), upr = exp(fit + 1.96 * se.fit))
+
+# Plot the points of the linear model but
+# Add trend lines to the linear models using the predicted values with confidence intervals
+midterm_1_plot <- ggplot(hapi, aes(x = hdl_cholesterol, y = monocytes, colour = Gender)) +
+  geom_point(size = 2.0, aes(colour = Gender)) + 
+  geom_smooth(data = addThese, aes(ymin = lwr, ymax = upr, colour = Gender, fill = Gender), stat = 'identity') +
+  scale_x_continuous(n.breaks = 10) +
+  scale_y_continuous(n.breaks = 10) +
+  labs(title = "HDL Cholesterol vs Monocytes in Blood", x = "HDL Cholesterol (mg/dL)", y = "Monocyte Frequency (% in peripheral blood)") + 
+  theme_bw()
+
+midterm_1_plot
+
+ggsave("midterm_1_glmplot.jpg")
+```
+
