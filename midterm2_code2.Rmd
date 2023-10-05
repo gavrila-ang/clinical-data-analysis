@@ -1,0 +1,161 @@
+---
+title: "midterm2_code2"
+author: "Ang_Gavrila"
+date: "3/2/2022"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+Below are the following variables that I am interested in factoring into my analyses:
+response variable = monocytes (count, discrete)
+predictor variables = hdl_cholesterol (count, discrete), age (count, continuous)
+confounding variable = sex (categorical)
+random variable = cohort (categorical)
+
+```{r setup, include=FALSE}
+library(dplyr)
+library(ggplot2)
+library(car)
+library(nlme)
+
+knitr::opts_chunk$set(echo = TRUE)
+
+# Importing my dataset
+df <- read.csv("hapichi_dataset.csv", header = T) 
+
+# Filtering the dataset to contain only the baseline visit, thereby removing interventional effects
+# Selecting only the columns containing the variables I'm interested in
+df <- df %>% filter(visit=="1") %>% 
+  select(c("monocytes", "age", "gender", "hdl_cholesterol", "cohort")) %>%
+  na.omit(T) %>% # Omit any participant that did not have complete clinical records
+  rename(sex = gender) # Rename the gender column into sex for conventions
+
+# Recoding the gender variables to be more descriptive for the boxplot figure legend
+df['sex'][df['sex'] == '1'] <- 'Male'
+df['sex'][df['sex'] == '2'] <- 'Female'
+
+# Categorising the sex variable
+df$sex <- factor(df$sex) 
+
+# Categorising the cohort variable
+df$cohort <- factor(df$cohort) 
+
+# Creating an agebin column, that sorts the participants into categories according to their age
+# This agebin column was not used for mixed linear model analyses, but for creating a boxplot figure
+# The range of the age "bins" are clinically arbitrary and are only for visualisation purposes
+df$agebin <- cut(df$age, breaks=c(60, 65, 70, 75, 80, 85, 90, 95), 
+                 labels = c("60-64", "65-69", "70-74", "75-80", "81-85", "86-90", "90-95"),
+                 right = FALSE)
+```
+
+```{r}
+
+# Assessing the normality and transforming the response variable
+# The response variable was right-skewed and log-transformed for normality
+# However there is no requirement for the response variable itself to be normally distributed in a linear mixed model (LMM).
+hist(df$hdl_cholesterol) #right-skewed
+hist(log(df$hdl_cholesterol)) #looks better
+shapiro.test(log(df$hdl_cholesterol)) #normalised
+```
+
+Linear Mixed Model Assumptions
+The predictor variables are related linearly to the response. (the literature is indicative of this)
+The errors have constant variance. (plot0) 
+The errors are independent. (Each participant is independent of each other ensured by enrollment conditions)
+The errors are normally distributed. (Q-Q plot)
+
+These assumptions must be met in order for the linear mixed model to be applicable to the population it is describing
+
+```{r}
+
+# My approach is to create an increasingly complex model to determine the level at which the model best fits the data. Afterwards, I will remove the predictor variables that does not contribute to the model to prevent the model from over fitting the data (in other words, the clinical population) and so that it may be more applied to the general population. 
+
+# Creating a "base" linear mixed model that factors in the predictor, response and confounding variable
+mod0 <- lme(monocytes ~ log(hdl_cholesterol) + sex, random = ~1|cohort, data = df, method = "ML", na.action = na.omit) 
+plot(mod0, main = "Errors have a constant variance")  # The errors have constant variance
+qqnorm(resid(mod0)) 
+qqline(resid(mod0)) # The errors are normally distributed
+Anova(mod0, type = 2) # Monocyte frequency is significantly associated with sex
+summary(mod0)   # The cohort variable exerts a small random effect onto the model; sex does have a significant contribution to the model
+
+# Creating a model that includes age as an additive factor
+mod1 <- lme(monocytes ~ log(hdl_cholesterol) + age + sex, random = ~1|cohort, data = df, method = "ML", na.action = na.omit)
+plot(mod1)  # The errors have constant variance
+qqnorm(resid(mod1)) 
+qqline(resid(mod1)) # The errors are even more normally distributed!
+Anova(mod1, type = 2) # Monocyte frequency is significantly associated with sex and age
+summary(mod1) # The cohort variable exerts a small random effect onto the model; sex and age do have significant contributions to the model. None of the predictor variables are highly correlated to each other. 
+
+# Comparing the base model to the "additive" model using anova
+anova(mod0, mod1) # Significantly different, the inclusion of age creates a better model to fit the data. 
+
+# Creating a model that includes age and hdl_cholesterol as interacting predictors
+# Age may exert a reinforcing effect on hdl_cholesterol as a predictor, as the body of older adults have more difficulty breaking down cholesterol
+# Initially, this may sound like age and hdl_cholesterol will be highly collinear, but a cor.test reveals a lower Pearson correlation value (0.179) between these two predictors. Therefore, using these two variables as predictors is okay. 
+# A type 3 ANOVA will be used as an interaction effect was included in the model
+mod2 <- lme(monocytes ~ log(hdl_cholesterol) * age + sex, random = ~1|cohort, data = df, method = "ML", na.action = na.omit)
+plot(mod2) # The errors have constant variance
+qqnorm(resid(mod2)) 
+qqline(resid(mod2)) # The errors are also every normally distributed!
+options(contrasts = c("contr.sum", "contr.poly")) # unbalanced
+Anova(mod2, type = 3) # Monocyte frequency is significantly associated with sex, but hdl_cholesterol and age now do not exert an interaction effect. Therefore, only their main effects will be considered. 
+options(contrasts = c("contr.treatment", "contr.poly"))
+summary(mod2)  # The cohort variable exerts a small random effect onto the model; sex continues to have a significant contribution to the model. 
+
+
+# Comparing the "additive" model to the "interaction" model using anova
+anova(mod1, mod2) # Not significantly different, the inclusion of an interaction term does not result in a better model fit.
+
+# I fail to reject the null hypotheses that high density lipoprotein levels does not affect circulating monocyte frequencies
+
+# For the sake of taking the statistical analyses further, I will create a model that only includes predictor variables that contribute to the model's fit to the data 
+# In other words, hdl_cholesterol variable will be excluded
+# The predictor variables, age and sex will be interpreted as "main" effects
+
+mod3 <- lme(monocytes ~ age + sex, random = ~1|cohort, data = df, method = "ML", na.action = na.omit)
+plot(mod3)  # The errors have constant variance
+qqnorm(resid(mod3)) 
+qqline(resid(mod3)) # The errors are even more normally distributed!
+Anova(mod3, type = 2) # Monocyte frequency is significantly associated with sex and age
+summary(mod3) # The cohort variable exerts a small random effect onto the model; sex and age do have significant contributions to the model. None of the predictor variables are highly correlated to each other, as expected since age does not determine sex
+
+# Comparing the "interactive" model to the "slimmed-down" model using anova
+anova(mod1, mod3) # Not significantly different, and so the inclusion of hdl_cholesterol isn't contributing to the model fit and therefore can be removed.
+
+```
+
+Conclusion:
+
+Model 1 (mod1) is the best model to fit the hypothetical relationship between high-density lipoprotein and monocyte frequencies. Model 3 (mod3) is the best "reduced" model, based on the clinical measures of the sample population, to predict the monocyte frequency of older adults. Model 3 is good at revealing which proportions of the population are at risk of developing high monocyte counts (late age, male). However, the practical use of this model in the clinical setting is limited as age and biological sex is not really something that can be controlled/therapeutically modified.
+
+
+mod1 <- lme(monocytes ~ log(hdl_cholesterol) + age + sex, random = ~1|cohort, data = df, method = "ML", na.action = na.omit)
+
+Subjects were placed into cohorts that completed the clinical trial at different times and places. The creation of cohorts may have lead to "group effects"; this was accounted for by including the cohort variable as a random effect. Interestingly, the cohort variable only exerted a small random effect onto the model despite the clinical trial being completed over a span of 5 years. Biological sex is a fixed effect as it does not change and was controlled for. Sex was considered as a confounding variable because it affected both the main predictor and response variable. Its overall effect on the monocyte frequencies of older adults  is highly debated in the literature. Age was also a fixed effect because it is a variable that changes at a constant rate over time. Age was controlled for, in order to take into account the effects of inflammaging.
+
+In conclusion, the high-density lipoprotein levels is not predictive of circulating monocyte frequency in older adults (Pr(>Chisq)=0.61663) even after controlling for sex and age, whilst blocking for group effects. This is further confirmed by the Anova comparison of mod1 and mod3. As such, I fail to reject the null hypotheses that high density lipoprotein levels does not affect circulating monocyte frequencies.
+
+```{r}
+# A plot showing the effects of high-density lipoprotein was not created as these predictor variables did not significantly affect monocyte frequency.
+# The following plot took into consideration, only the main effects of the age and sex variables.
+# These variables were plotted as these significantly affected circulating monocyte frequencies
+# Boxplots were used as the age and sex variables will be plotted as categorical factors
+# For visualisation purposes, age is plotted as a categorical variable to clearly show the positive trend age and monocytes
+# The figure also shows that older male adults on average, have higher frequencies of circulating monocytes in their blood compared to females of the same age. 
+
+df$subject_char <- interaction(df$sex, df$agebin)
+ggplot(data = df, aes(x=agebin, y= monocytes, colour = sex)) + 
+  geom_boxplot() +
+  scale_y_continuous(n.breaks = 20) + # Make more breaks on the y-axis 
+  ylab("Monocytes (frequency in blood)") +
+  xlab("") +
+  theme_bw() +
+  ggtitle("Figure 1: Monocytes vs Subject Characteristics") +
+  theme(text = element_text(size=20)) # Make the text size bigger
+
+ggsave("Final.png")
+```
+
+
+
+
