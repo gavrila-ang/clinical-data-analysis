@@ -1,2 +1,3 @@
 # clinical-data-analysis
-Analyze and visualize data using R to extract insights, identify patterns, and generate reports from diverse datasets. Collaboration and feedback are encouraged.
+Analyses and visualisation of clinical datasets using R to identify patterns, extract clinically relevant insights and generate reports.
+Collaboration and feedback is greatly appreciated.
